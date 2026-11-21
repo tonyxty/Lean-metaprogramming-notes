@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lean 4 元编程：从使用 tactic 到编写 tactic</title>
+<style>
+:root {
+  color-scheme: light;
+  --paper: #F3F5F8;
+  --ink: #18212F;
+  --muted: #5B6678;
+  --rule: #CBD3DE;
+  --hole: #A86E00;        /* 元变量 / 洞：贯穿全课的强调色 */
+  --hole-bg: #FCEBC4;
+  --fvar: #2F5FAF;        /* 局部假设 */
+  --code-bg: #FFFFFF;
+  --kw: #7A3E9D;
+  --str: #2E7D4F;
+  --cmt: #8A94A6;
+  --serif: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "STSong", serif;
+  --sans: "PingFang SC", "Noto Sans CJK SC", "Source Han Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", "Noto Sans Mono CJK SC", monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #DDE2E9; overflow: hidden; }
+body { font-family: var(--sans); color: var(--ink); }
+
+#stage { position: absolute; left: 50%; top: 50%; width: 1280px; height: 720px; transform-origin: center center; }
+.slide {
+  position: absolute; inset: 0; background: var(--paper);
+  padding: 64px 88px 72px; display: none; flex-direction: column;
+  box-shadow: 0 2px 24px rgba(24,33,47,.12);
+}
+.slide.active { display: flex; }
+.slide > .crumb { position: absolute; top: 26px; left: 88px; font-size: 15px; color: var(--muted); }
+.slide > .num { position: absolute; bottom: 26px; right: 88px; font-size: 15px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+h1, h2, h3 { font-family: var(--serif); font-weight: 700; margin: 0; line-height: 1.25; }
+h2 { font-size: 40px; margin-bottom: 28px; }
+h3 { font-size: 26px; margin: 4px 0 12px; }
+p, li { font-size: 25px; line-height: 1.6; margin: 0 0 14px; max-width: 34em; }
+ul { margin: 0; padding-left: 1.2em; }
+li { margin-bottom: 10px; }
+li::marker { color: var(--rule); }
+.small, .small p, .small li { font-size: 20px; }
+.muted { color: var(--muted); }
+code { font-family: var(--mono); font-size: .86em; background: #E4E8EE; padding: 1px 6px; border-radius: 4px; }
+
+pre {
+  font-family: var(--mono); font-size: 19px; line-height: 1.5; margin: 0 0 18px;
+  background: var(--code-bg); border-left: 4px solid var(--rule);
+  padding: 16px 22px; border-radius: 0 6px 6px 0; overflow: hidden; white-space: pre;
+}
+pre.tight { font-size: 17px; line-height: 1.42; }
+pre code { background: none; padding: 0; font-size: inherit; }
+.t-kw { color: var(--kw); font-weight: 600; }
+.t-str { color: var(--str); }
+.t-cmt { color: var(--cmt); font-style: italic; }
+.t-name { color: var(--fvar); }
+.t-const { color: #1F4B7A; }
+.t-num { color: #B0413E; }
+.t-hole { color: var(--hole); background: var(--hole-bg); border-radius: 3px; padding: 0 2px; }
+.t-anti { color: var(--hole); font-weight: 600; }
+.t-quote { color: var(--str); font-weight: 600; }
+
+/* infoview 风格的目标面板 */
+.goal {
+  font-family: var(--mono); font-size: 22px; line-height: 1.6;
+  background: #fff; border: 1px solid var(--rule); border-radius: 8px;
+  padding: 18px 26px; display: inline-block; min-width: 360px;
+}
+.goal .hyp .n { color: var(--fvar); }
+.goal .turn { border-top: 1px solid var(--rule); margin-top: 8px; padding-top: 8px; }
+.goal .tag { color: var(--hole); font-size: 17px; display: block; margin-bottom: 4px; }
+.hole { color: var(--hole); background: var(--hole-bg); border-radius: 4px; padding: 0 5px; font-family: var(--mono); }
+.fv { color: var(--fvar); font-family: var(--mono); }
+
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 44px; align-items: start; }
+.cols.wide-left { grid-template-columns: 1.35fr 1fr; }
+.note { border-left: 4px solid var(--hole); padding: 6px 0 6px 18px; margin-top: 8px; }
+.note p { margin: 0; }
+
+/* 标题页 */
+.title { justify-content: center; padding-left: 120px; }
+.title h1 { font-size: 56px; margin-bottom: 16px; }
+.title .sub { font-size: 26px; color: var(--muted); }
+
+/* 章节页：大号章节号 + 本节在全局路线中的位置 */
+.section { justify-content: center; }
+.section .idx { font-family: var(--serif); font-size: 160px; line-height: 1; color: var(--rule); margin-bottom: 8px; }
+.section h2 { font-size: 60px; margin-bottom: 18px; }
+.route { display: flex; gap: 10px; margin-top: 48px; font-size: 17px; }
+.route span { padding: 6px 12px; border-radius: 6px; background: #E4E8EE; color: var(--muted); }
+.route span.on { background: var(--ink); color: #fff; }
+
+/* 流水线图 */
+.pipe { display: flex; align-items: stretch; gap: 0; margin: 10px 0 30px; }
+.pipe .stage { flex: 1; background: #fff; border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; }
+.pipe .stage b { font-family: var(--mono); font-size: 22px; display: block; margin-bottom: 6px; }
+.pipe .stage span { font-size: 17px; color: var(--muted); line-height: 1.45; display: block; }
+.pipe .arrow { display: flex; align-items: center; padding: 0 10px; color: var(--muted); font-size: 15px; flex-direction: column; justify-content: center; text-align: center; min-width: 92px; }
+.pipe .arrow::after { content: "⟶"; font-size: 26px; line-height: 1; margin-top: 2px; }
+.pipe .stage.hl { border-color: var(--hole); box-shadow: inset 0 0 0 1px var(--hole); }
+
+table { border-collapse: collapse; font-size: 20px; width: 100%; }
+th, td { text-align: left; padding: 6px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--serif); font-weight: 700; color: var(--muted); font-size: 18px; }
+
+/* 单子栈 */
+.stack { display: flex; flex-direction: column; gap: 0; width: 520px; }
+.stack div { border: 1px solid var(--rule); background: #fff; padding: 12px 18px; font-size: 20px; }
+.stack div + div { border-top: none; }
+.stack b { font-family: var(--mono); display: inline-block; min-width: 150px; }
+
+/* Syntax 树 */
+.nd { font-family: var(--mono); font-size: 18px; padding: 1px 8px; border-radius: 4px; display: inline-block; }
+.nd.kind { background: var(--ink); color: #fff; }
+.nd.atom { background: #E4E8EE; color: var(--str); }
+.nd.ident { background: #E1E9F7; color: var(--fvar); }
+.tree ul { list-style: none; margin: 0; padding-left: 26px; position: relative; }
+.tree > ul { padding-left: 0; }
+.tree li { position: relative; margin: 0; padding: 3px 0; font-size: 18px; line-height: 1.3; max-width: none; }
+.tree ul ul li::before { content: ""; position: absolute; left: -16px; top: 0; bottom: 0; border-left: 1px solid var(--rule); }
+.tree ul ul li:last-child::before { bottom: 50%; }
+.tree ul ul li::after { content: ""; position: absolute; left: -16px; top: 50%; width: 12px; border-top: 1px solid var(--rule); }
+.tree ul ul li:has(> ul)::after { top: 15px; }
+.tree ul ul li:has(> ul):last-child::before { bottom: auto; height: 15px; }
+
+/* 进度条 */
+#bar { position: fixed; left: 0; bottom: 0; height: 4px; background: var(--hole); transition: width .2s; z-index: 5; }
+#help { position: fixed; right: 14px; bottom: 12px; font-size: 13px; color: var(--muted); z-index: 5; }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media print {
+  html, body { overflow: visible; background: #fff; height: auto; }
+  #stage { position: static; transform: none !important; width: auto; height: auto; }
+  .slide { display: flex !important; position: relative; width: 1280px; height: 720px; page-break-after: always; box-shadow: none; }
+  #bar, #help { display: none; }
+}
+</style>
+</head>
+<body>
+<div id="stage">
+<section class="slide title" data-sec="">
+  <h1>Lean 4 元编程：从使用 tactic 到编写 tactic</h1>
+</section>
+
+<section class="slide" data-sec="">
+  <h2>今天的路线</h2>
+  <table>
+    <tr><th></th><th>内容</th></tr>
+    <tr><td>1</td><td>动机与全景</td></tr>
+    <tr><td>2</td><td>Lean 作为编程语言</td></tr>
+    <tr><td>3</td><td>Syntax：代码是数据</td></tr>
+    <tr><td>4</td><td>Expr：项也是数据</td></tr>
+    <tr><td>5</td><td>元变量与证明目标</td></tr>
+    <tr><td>6</td><td>MetaM：unify与填洞</td></tr>
+    <tr><td>7</td><td>引用、宏与</td></tr>
+    <tr><td>8</td><td>动手写 tactic</td></tr>
+    <tr><td>9</td><td>收尾与延伸</td></tr>
+  </table>
+  <p class="small muted" style="margin-top:18px">代码默认开头有 <code>import Lean</code> 和 <code>open Lean Elab Tactic Meta</code>。</p>
+</section>
+
+<section class="slide section" data-sec="1 动机与全景">
+  <div class="idx">1</div><h2>动机与全景</h2>
+  <div class="route" data-on="1"></div>
+</section>
+
+<section class="slide" data-sec="1 动机与全景">
+  <h2>日常使用的 tactic，都是 Lean 程序</h2>
+  <p><code>simp</code>、<code>omega</code>、<code>ring</code>、<code>linarith</code>、<code>exact?</code> 都不是写死在编译器里的。它们是用 Lean 写的程序，在证明被检查之前运行，任务是造出证明项。</p>
+  <p>这种“操作 Lean 程序（包括证明）的 Lean 程序”叫<b>元程序</b>。</p>
+  <p>Mathlib 的 <code>ring</code> 就是一个普通的 <code>.lean</code> 文件，可以直接跳转到定义去读。</p>
+  <div class="note"><p>今天的目标：写出几个自己的 tactic，并能大致读懂这些源码的结构。</p></div>
+</section>
+
+<section class="slide" data-sec="1 动机与全景">
+  <h2>从源码到 kernel</h2>
+  <div class="pipe">
+    <div class="stage"><b>源码</b><span>文本</span></div>
+    <div class="arrow">parser</div>
+    <div class="stage hl"><b>Syntax</b><span>只知道“长什么样”</span></div>
+    <div class="arrow">宏展开</div>
+    <div class="stage hl"><b>Syntax</b><span>改写后的语法</span></div>
+    <div class="arrow">elaborate</div>
+    <div class="stage hl"><b>Expr</b><span>完全显式的项<br>tactic 在这一步运行</span></div>
+    <div class="arrow">kernel</div>
+    <div class="stage"><b>✓ / ✗</b><span>类型检查</span></div>
+  </div>
+  <p><code>by ...</code> 里的 tactic 在 elaboration 阶段运行，唯一职责是产出一个 <code>Expr</code>。</p>
+  <p>kernel 不关心 tactic。tactic 写错了，造出的项会被拒绝。因此元编程不会破坏可靠性。</p>
+</section>
+
+<section class="slide" data-sec="1 动机与全景">
+  <h2>tactic 证明就是“造项的程序”</h2>
+  <pre class="lean">example (p q : Prop) (hp : p) (hq : q) : p ∧ q := by
+  show_term constructor &lt;;&gt; assumption
+-- Try this: exact ⟨hp, hq⟩</pre>
+  <p><code>show_term</code> 打印 tactic 造出来的项。<b>项</b>（term）就是 Lean 里的表达式，证明也是项：<code>⟨hp, hq⟩</code> 即 <code>And.intro hp hq</code>，它的类型 <code>p ∧ q</code> 就是要证的命题。</p>
+  <pre class="lean">set_option pp.all true in
+#check fun (n : Nat) => n + 1</pre>
+  <p>打开 <code>pp.all</code> 能看到所有隐式参数和类型类实例，也就是 elaborator 实际产出的东西。</p>
+</section>
+
+<section class="slide section" data-sec="2 Lean 作为编程语言">
+  <div class="idx">2</div><h2>Lean 作为编程语言</h2>
+  <div class="route" data-on="2"></div>
+</section>
+
+<section class="slide" data-sec="2 Lean 作为编程语言">
+  <h2>定义与求值</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">def double (n : Nat) : Nat := 2 * n
+#eval double 21          -- 42
+
+def sumList : List Nat → Nat
+  | []      => 0
+  | x :: xs => x + sumList xs
+
+#eval sumList [1, 2, 3]  -- 6
+
+def findFirstEven (xs : List Nat) : Option Nat :=
+  xs.find? (fun x => x % 2 == 0)
+#eval findFirstEven [1, 3, 4]   -- some 4</pre>
+    <div class="small">
+      <p><code>#eval</code> 运行并打印结果；<code>#check</code> 只看类型。</p>
+      <p><code>Option α</code> 表示可能失败的计算：<code>some x</code> 或 <code>none</code>。元编程里大量 API 返回 <code>Option</code>。</p>
+      <p><code>fun x => …</code> 是匿名函数。</p>
+      <p><code>==</code> 比较两边的值并返回 <code>Bool</code></p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="2 Lean 作为编程语言">
+  <h2>单子：带有环境的计算</h2>
+  <p style="font-size:30px; font-family:var(--serif); margin-bottom:28px">单子 <code>M</code> 是一种计算环境。<code>M α</code> 是“在 M 里运行、最后产出 α 的计算”。</p>
+  <div class="cols">
+    <div class="small">
+      <p><code>IO</code>：读写文件、打印</p>
+      <p><code>MetaM</code>：查询类型、构造项</p>
+      <p><code>TacticM</code>：读写目标列表</p>
+    </div>
+    <div>
+      <pre class="lean">def roll : IO Unit := do
+  let n ← IO.rand 1 6
+  IO.println s!"掷出 {n}"</pre>
+      <p class="small"><code>IO.rand 1 6</code> 不是一个数，而是“去掷一次骰子”这个计算：它需要访问一些外部环境。<code>←</code> 运行它，取出结果 <code>n</code>。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="2 Lean 作为编程语言">
+  <h2>do 记法</h2>
+  <div class="cols wide-left">
+    <pre class="lean">def demo : IO Unit := do
+  let xs := [1, 3, 4, 7]
+  let mut total := 0
+  for x in xs do
+    IO.println s!"x = {x}"
+    total := total + x
+  IO.println s!"total = {total}"
+  match findFirstEven xs with
+  | some n => IO.println s!"first even: {n}"
+  | none   => IO.println "no even number"
+
+#eval demo</pre>
+    <div class="small">
+      <p><code>IO Unit</code>：一个可以做 IO、最后返回 <code>Unit</code> 的计算。</p>
+      <p><code>do</code> 块里可以按顺序写步骤：<code>let mut</code>、<code>for</code>、<code>if</code>、<code>match</code>、<code>return</code>、<code>try … catch</code>。</p>
+      <p><code>s!"…{x}…"</code> 是字符串插值。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide section" data-sec="3 Syntax">
+  <div class="idx">3</div><h2>Syntax：代码是数据</h2>
+  <div class="route" data-on="3"></div>
+</section>
+
+<section class="slide" data-sec="3 Syntax">
+  <h2>Syntax：parser 产出的树</h2>
+  <div class="cols wide-left">
+    <div>
+      <p class="small muted" style="margin-bottom:6px">源码 <code>exact ⟨hp, hq⟩</code> 解析之后：</p>
+      <div class="tree"><ul><li><span class="nd kind">exact</span><ul>
+        <li><span class="nd atom">"exact"</span></li>
+        <li><span class="nd kind">anonymousCtor</span><ul>
+          <li><span class="nd atom">"⟨"</span></li>
+          <li><span class="nd ident">hp</span></li>
+          <li><span class="nd atom">","</span></li>
+          <li><span class="nd ident">hq</span></li>
+          <li><span class="nd atom">"⟩"</span></li>
+        </ul></li>
+      </ul></li></ul></div>
+    </div>
+    <div class="small">
+      <p>节点只有三种：<span class="nd kind">node</span> 带一个种类名，<span class="nd atom">atom</span> 是关键字和符号，<span class="nd ident">ident</span> 是标识符。</p>
+      <p>它只记录形状：不知道类型，也不知道 <code>hp</code> 指向哪条假设。</p>
+      <p class="muted">（种类名做了简化。）</p>
+    </div>
+  </div>
+  <div class="note" style="margin-top:26px"><p>Syntax 是普通的数据，可以拆开、匹配、拼出新的。宏就是在做这件事。</p></div>
+</section>
+
+<section class="slide" data-sec="3 Syntax">
+  <h2>Syntax 是数据：可以拼，也可以改</h2>
+  <pre class="lean tight">-- 拼：a + b 就是一个 node，三个孩子
+def plusStx : Syntax :=
+  Syntax.node SourceInfo.none ``«term_+_» #[mkIdent `a, mkAtom "+", mkIdent `b]
+
+-- 改：把 + 节点换成 * 节点
+def plusToTimes (stx : Syntax) : Syntax :=
+  stx.rewriteBottomUp fun s =>
+    match s with
+    | Syntax.node info ``«term_+_» #[a, _, b] =>
+        Syntax.node info ``«term_*_» #[a, mkAtom "*", b]
+    | _ => s
+
+run_meta do
+  logInfo m!"{plusStx}"              -- a + b
+  logInfo m!"{plusToTimes plusStx}"  -- a * b</pre>
+  <div class="cols small">
+    <div>
+      <p><code>run_meta do …</code>：运行一段元程序，<code>logInfo</code> 把结果显示在 infoview。</p>
+    </div>
+    <div>
+      <p>改的时候完全不关心 <code>a</code> 是什么类型，只是在换树上的节点。to_additive 就是用类似的方法实现的。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide section" data-sec="4 Expr">
+  <div class="idx">4</div><h2>Expr：项也是数据</h2>
+  <div class="route" data-on="4"></div>
+</section>
+
+<section class="slide" data-sec="4 Expr">
+  <h2>Expr：完全显式的项</h2>
+  <div class="pipe" style="margin-bottom:20px">
+    <div class="stage"><b>x + y</b><span>Syntax</span></div>
+    <div class="arrow">elaborate</div>
+    <div class="stage hl" style="flex:2.2"><b style="font-size:20px">@HAdd.hAdd Nat Nat Nat (instHAdd …) x y</b><span>Expr：名字已解析，隐式参数和实例都写了出来</span></div>
+  </div>
+  <div class="cols wide-left">
+    <table>
+      <tr><td><code>const</code></td><td>全局常量 <code>And</code>、<code>Nat.add</code></td></tr>
+      <tr><td><code>app f a</code></td><td>函数应用，一次一个参数</td></tr>
+      <tr><td><code>lam</code> / <code>forallE</code></td><td><code>fun</code>，以及 <code>∀</code> 和 <code>→</code></td></tr>
+      <tr><td><code>mvar</code></td><td>元变量 <span class="hole">?g</span></td></tr>
+    </table>
+    <div class="small">
+      <p>没有专门的 <code>∧</code>、<code>=</code>、<code>+</code>，都是常量的应用：</p>
+      <p style="font-family:var(--mono);font-size:19px">p ∧ q<br>= app (app (const And) p) q</p>
+      <p class="muted">证明也是 Expr，比如第 6 页的 <code>And.intro hp hq</code>。<code>pp.all</code> 显示的就是 Expr 的完整样子。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="4 Expr">
+  <h2>构造 Expr</h2>
+  <pre class="lean">def onePlusTwo : Expr :=
+  mkApp2 (mkConst ``Nat.add) (mkNatLit 1) (mkNatLit 2)
+
+def trueAndFalse : Expr :=
+  mkApp2 (mkConst ``And) (mkConst ``True) (mkConst ``False)
+
+run_meta do
+  logInfo m!"{onePlusTwo} : {← inferType onePlusTwo}"      -- Nat.add 1 2 : Nat
+  logInfo m!"{trueAndFalse} : {← inferType trueAndFalse}"  -- True ∧ False : Prop</pre>
+  <div class="cols small">
+    <div>
+      <p><code>mkConst</code>、<code>mkApp2</code>、<code>mkNatLit</code>：就是上一页的 <code>const</code>、<code>app</code>，换了个好写的名字。</p>
+    </div>
+    <div>
+      <p><code>m!"…"</code>：可以插入 <code>Expr</code> 的字符串插值。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="4 Expr">
+  <h2>操作 Expr</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">-- 读：是不是 p ∧ q 的形状
+def andParts? : Expr → Option (Expr × Expr)
+  | Expr.app (Expr.app (Expr.const ``And _) p) q => some (p, q)
+  | _ => none
+
+-- 改：交换 Nat.add 的两个参数
+def swapAdd (e : Expr) : Expr :=
+  e.replace fun sub =>
+    match sub with
+    | Expr.app (Expr.app (Expr.const ``Nat.add _) a) b =>
+        some (mkApp2 (mkConst ``Nat.add) b a)
+    | _ => none
+
+run_meta do
+  match andParts? trueAndFalse with
+  | some (p, q) => logInfo m!"左 {p}，右 {q}"  -- 左 True，右 False
+  | none        => logInfo "不是合取"
+  logInfo m!"{swapAdd onePlusTwo}"   -- Nat.add 2 1
+  logInfo m!"{← whnf onePlusTwo}"    -- 3</pre>
+    <div class="small">
+      <p>和 Syntax 一样：<code>match</code> 拆，构造子拼。</p>
+      <p><code>Expr.replace</code>：返回 <code>some</code> 就替换这个子项，<code>none</code> 就继续往里找。</p>
+      <p>Expr 能被归约：<code>whnf</code> 把 <code>1 + 2</code> 归约成 <code>3</code>。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide section" data-sec="5 元变量与证明目标">
+  <div class="idx">5</div><h2>元变量与证明目标</h2>
+  <div class="route" data-on="5"></div>
+</section>
+
+<section class="slide" data-sec="5 元变量与证明目标">
+  <h2>证明状态背后是什么</h2>
+  <div class="cols">
+    <div class="goal">
+      <span class="tag">?g</span>
+      <div class="hyp"><span class="n">p q</span> : Prop</div>
+      <div class="hyp"><span class="n">hp</span> : p</div>
+      <div class="hyp"><span class="n">hq</span> : q</div>
+      <div class="turn">⊢ p ∧ q</div>
+    </div>
+    <div class="small">
+      <p>每个目标是一个<b>元变量</b> <span class="hole">?g</span>：证明项（一个 Expr）里还没填的洞，也就是上一节的 <code>mvar</code>。它带着：</p>
+      <p>一个类型：<code>⊢</code> 后面的 <code>p ∧ q</code>，本身也是 Expr</p>
+      <p>一个 local context：横线上面的假设</p>
+      <p>一个赋值：一开始为空。<b>解决目标 = 给这个 mvar 赋一个类型正确的 Expr。</b></p>
+    </div>
+  </div>
+  <div>
+    <p><code>by ...</code> 会推断当前位置所需的类型，并创建一个元变量。</p>
+  </div>
+</section>
+
+<section class="slide" data-sec="5 元变量与证明目标">
+  <h2><code>constructor</code> 做了什么</h2>
+  <div class="cols" style="align-items:center">
+    <div class="goal"><span class="tag">?g</span><div class="turn" style="border:0;margin:0;padding:0">⊢ p ∧ q</div></div>
+    <div class="goal"><span class="tag">?g₁</span>⊢ p<div class="turn"><span class="tag">?g₂</span>⊢ q</div></div>
+  </div>
+  <p style="font-family:var(--mono); font-size:30px; margin:40px 0 28px"><span class="hole">?g</span> := And.intro <span class="hole">?g₁</span> <span class="hole">?g₂</span></p>
+  <p>tactic 的工作模式：拿到一个洞，要么直接填上，要么填上一个带着更小的洞的项，再更新目标列表。</p>
+  <p>所有洞都填满后，把赋值代入，就得到完整证明项。</p>
+</section>
+
+<section class="slide" data-sec="5 元变量与证明目标">
+  <h2>tactic 是改写证明状态的程序</h2>
+  <div class="cols">
+    <div>
+      <p>证明状态 = 一个目标列表 <span class="hole">[?g₁, ?g₂, …]</span>，每个目标是一个 mvar。</p>
+      <p>一个 tactic 应当做的事情只有几类：</p>
+      <ul class="small">
+        <li>读：目标的类型和局部上下文（都是 Expr）</li>
+        <li>造：新的 Expr，里面可以带新的 mvar</li>
+        <li>写：给目标 mvar 赋值</li>
+        <li>更新：把目标列表换成剩下的洞</li>
+      </ul>
+    </div>
+    <div class="small">
+      <p class="muted" style="margin-top:30px">第 8 节写的每一个 tactic，都是这四步的组合。第 6 节讲怎么读写 Expr 和 mvar，第 7 节讲怎么构造 Syntax。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide section" data-sec="6 MetaM">
+  <div class="idx">6</div><h2>MetaM：读写 Expr 和目标</h2>
+  <div class="route" data-on="6"></div>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>单子栈</h2>
+  <div class="cols">
+    <div class="stack">
+      <div><b>CoreM</b>环境、选项、报错</div>
+      <div style="margin-left:28px"><b>MetaM</b>mvar、局部上下文、类型推断、unify</div>
+      <div style="margin-left:56px"><b>TermElabM</b>Syntax → Expr</div>
+      <div style="margin-left:84px"><b>TacticM</b>目标列表</div>
+    </div>
+    <div>
+      <p>一层套一层，外层的能力内层都有。</p>
+      <p>在 <code>TacticM</code> 里可以直接调用任何 <code>MetaM</code> 函数，Lean 自动提升。</p>
+      <p>对照第 4、5 节：Expr 和 mvar 归 <code>MetaM</code> 管，目标列表归 <code>TacticM</code> 管。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>回到第 4 节的例子：哪些需要 MetaM</h2>
+  <pre class="lean tight">run_meta do
+  logInfo m!"{onePlusTwo}"                      -- 纯数据，不需要单子
+  logInfo m!"类型: {← inferType onePlusTwo}"     -- 要查环境：MetaM
+  logInfo m!"whnf: {← whnf onePlusTwo}"         -- 要展开定义：MetaM</pre>
+  <div class="cols small">
+    <div>
+      <p>构造和模式匹配 Expr 是纯函数，第 4 节的 <code>def</code> 都不在单子里。</p>
+    </div>
+    <div>
+      <p>要知道常量的类型、定义，或者要读写 mvar，就得在 <code>MetaM</code> 里，用 <code>←</code> 取结果。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>识别 Expr 的形状</h2>
+  <div class="cols wide-left">
+    <pre class="lean">e.isAppOf ``And          -- Bool
+e.isAppOfArity ``And 2   -- Bool
+e.getAppFn               -- 头部函数
+e.getAppArgs             -- 参数数组
+e.and?    -- Option (Expr × Expr)
+e.eq?     -- Option (Expr × Expr × Expr)
+e.not?    -- Option Expr
+
+let some (p, q) := target.and?
+  | throwError "目标不是合取"
+-- 这里 p q 可用</pre>
+    <div class="small">
+      <p>这些都是在树上做模式匹配：头部是不是某个 <code>const</code>，参数有几个。</p>
+      <p>识别是纯语法的。<code>def MyProp := p ∧ q</code>，目标是 <code>MyProp</code> 时 <code>and?</code> 返回 <code>none</code>。</p>
+      <p>目标里也可能有已赋值未代入的 mvar。</p>
+      <div class="note"><p>先规范化再识别：<code>goal.getType'</code> 会做 <code>instantiateMVars</code> + <code>whnf</code>。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>五个最常用的函数</h2>
+  <table>
+    <tr><td><code>inferType e</code></td><td>求 <code>e</code> 的类型</td></tr>
+    <tr><td><code>isDefEq a b</code></td><td>定义等价？必要时展开定义；有 mvar 时尝试赋值使两边相等（unify），失败则撤销</td></tr>
+    <tr><td><code>whnf e</code></td><td>弱头范式：一直归约最外层，直到头部不能再展开</td></tr>
+    <tr><td><code>instantiateMVars e</code></td><td>把已赋值的 mvar 代入</td></tr>
+    <tr><td><code>mkFreshExprMVar ty</code></td><td>创建新的洞。</td></tr>
+  </table>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>unify：apply 的本质</h2>
+  <pre class="lean">run_meta do
+  let m ← mkFreshExprMVar (mkConst ``Nat)                 -- ?m : Nat
+  let lhs := mkApp2 (mkConst ``Nat.add) m (mkNatLit 1)    -- ?m + 1
+  let rhs := mkApp2 (mkConst ``Nat.add) (mkNatLit 41) (mkNatLit 1)
+  let ok ← isDefEq lhs rhs
+  logInfo m!"{ok}, ?m := {← instantiateMVars m}"
+  -- true, ?m := 41</pre>
+  <p><code>apply h</code>：为 <code>h</code> 的每个参数造 mvar，用 <code>isDefEq</code> 把结论和目标unify，没被确定的 mvar 变成新目标。</p>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>进入 TacticM：看目标</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">elab "show_goal" : tactic => do
+  let goal ← getMainGoal
+  goal.withContext do
+    logInfo m!"目标: {← goal.getType}"
+    for decl in (← getLCtx) do
+      if decl.isImplementationDetail then continue
+      logInfo m!"假设 {decl.userName} : {decl.type}"
+
+example (p q : Prop) (hp : p) (hq : q) : p ∧ q := by
+  show_goal
+  exact ⟨hp, hq⟩</pre>
+    <div class="small">
+      <p><code>elab "show_goal" : tactic => do …</code>：注册一个新 tactic，后面是一段在 <code>TacticM</code> 里运行的程序。</p>
+      <p><code>getMainGoal</code>：取主目标。</p>
+      <p><code>withContext</code>：进入目标的局部上下文。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="6 MetaM">
+  <h2>手动填一个洞</h2>
+  <pre class="lean">elab "prove_true" : tactic => do
+  let goal ← getMainGoal
+  goal.assign (mkConst ``True.intro)  -- ?g := True.intro
+  replaceMainGoal []                  -- 没有新目标
+
+example : True := by prove_true</pre>
+  <p class="small">第 5 节的“写”和“更新”两步。<code>replaceMainGoal gs</code>：把主目标换成列表 <code>gs</code>，空列表表示已完成。</p>
+  <div class="note"><p class="small">对 <code>⊢ False</code> 用 <code>prove_true</code>？<code>assign</code> 不检查类型，这一步“成功”了，但最终检查证明项时报错。</p></div>
+</section>
+
+<section class="slide section" data-sec="7 引用与宏">
+  <div class="idx">7</div><h2>引用与宏</h2>
+  <div class="route" data-on="7"></div>
+</section>
+
+<section class="slide" data-sec="7 引用与宏">
+  <h2>引用：构造 Syntax 的简写</h2>
+  <p class="small">第 3 节手拼过 Syntax 树。写一个稍大的 tactic 就很啰嗦（示意）：</p>
+  <pre class="lean tight">Syntax.node ``Lean.Parser.Tactic.exact #[
+  Syntax.atom "exact",
+  Syntax.node ``Lean.Parser.Term.anonymousCtor #[
+    Syntax.atom "⟨", Syntax.ident `hp, Syntax.atom ",", Syntax.ident `hq, Syntax.atom "⟩"]]</pre>
+  <p class="small">引用（quotation）让我们直接写出想要的代码，由 parser 代为造出这棵树：</p>
+  <pre class="lean">`(tactic| exact ⟨hp, hq⟩)     -- 一棵 Syntax 树，按 tactic 语法解析</pre>
+  <div class="note"><p class="small">引用不执行代码，而是返回代码对应的数据。<code>tactic|</code> 告诉 parser 按哪种语法类别解析，<code>`(…)</code> 不写类别时默认按项（<code>term</code>）解析。</p></div>
+</section>
+
+<section class="slide" data-sec="7 引用与宏">
+  <h2>第一个宏 tactic</h2>
+  <pre class="lean">macro "my_trivial" : tactic =>
+  `(tactic| first | rfl | omega | simp)
+
+example : 2 + 2 = 4 := by my_trivial
+example (n : Nat) : n + 0 = n := by my_trivial
+example (a b : Nat) (h : a &lt; b) : a + 1 ≤ b := by my_trivial</pre>
+  <ul class="small">
+    <li><code>macro "my_trivial" : tactic</code> 声明一种新语法，属于 <code>tactic</code> 类别。</li>
+    <li><code>=&gt;</code> 后面是一个 Syntax → MetaM Syntax 的函数：看到 <code>my_trivial</code> 这棵树，就换成右边那棵。</li>
+    <li><code>simp</code> 放最后，因为它只化简不解决目标也算成功。</li>
+  </ul>
+</section>
+
+<section class="slide" data-sec="7 引用与宏">
+  <h2>反引用 <code>$h</code>：在模板里留洞</h2>
+  <pre class="lean">macro "apply_close " h:term : tactic =>
+  `(tactic| (apply $h &lt;;&gt; assumption))
+
+example (p q : Prop) (hp : p) (hq : q) : p ∧ q := by
+  apply_close And.intro</pre>
+  <p><code>h:term</code>：这个位置接受一个项，绑定到 <code>h</code> 的是它的 Syntax 树，还没有 elaborate。</p>
+  <p><code>$h</code> 叫反引用（antiquotation）：把已有的一棵子树插进模板。引用是带洞的树，反引用就是洞的位置。</p>
+</section>
+
+<section class="slide" data-sec="7 引用与宏">
+  <h2>syntax + macro_rules：引用也能做模式</h2>
+  <pre class="lean">syntax "easy" : tactic
+
+macro_rules | `(tactic| easy) => `(tactic| rfl)
+macro_rules | `(tactic| easy) => `(tactic| assumption)
+macro_rules
+| `(tactic| easy) => `(tactic| (constructor &lt;;&gt; easy))
+
+example (p q : Prop) (hp : p) (hq : q) :
+  p ∧ (q ∧ 3 = 3) := by easy</pre>
+  <p>声明语法和展开规则分开写。<code>|</code> 左边的引用是模式，用来匹配输入的树；右边的引用是输出。</p>
+  <p>同一个语法可以有多条规则：从最后定义的开始试，失败就回退到更早的。</p>
+  <p>任何人都能在别的文件里给 <code>easy</code> 加规则。核心里的 <code>trivial</code> 就是这样扩展的。</p>
+</section>
+
+<section class="slide" data-sec="7 引用与宏">
+  <h2>宏的边界，以及从 Syntax 到 Expr</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">elab "#expr " t:term : command =>
+  Command.liftTermElabM do
+    let e ← instantiateMVars
+      (← Term.elabTermAndSynthesize t none)
+    logInfo m!"{e}\n{repr e}"
+
+#expr fun (x : Nat) => x
+#expr (2 + 3 : Nat)    -- 看看 HAdd.hAdd 和实例</pre>
+    <div class="small">
+      <p>宏只做 Syntax → Syntax。它看不见目标是什么类型，也没法根据假设的形状做判断。</p>
+      <p><code>elab</code> 可以拿到 Syntax 之后亲手调用 elaborator，得到 Expr。左边就是第 4 节那条 elaborate 箭头的代码版。</p>
+      <p class="muted">Expr 也有带类型检查的引用写法，在 Mathlib 依赖的 <code>Qq</code> 库里，今天不讲。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide section" data-sec="8 动手写 tactic">
+  <div class="idx">8</div><h2>动手写 tactic</h2>
+  <div class="route" data-on="8"></div>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>my_assumption</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">elab "my_assumption" : tactic => do
+  let goal ← getMainGoal
+  goal.withContext do
+    let target ← goal.getType
+    for decl in (← getLCtx) do
+      if decl.isImplementationDetail then continue
+      if (← isDefEq decl.type target) then
+        goal.assign decl.toExpr
+        replaceMainGoal []
+        return
+    throwError "my_assumption: 没有类型为 {target} 的假设"
+
+example (p q : Prop) (hp : p) (hq : q) : q := by
+  my_assumption</pre>
+    <div class="small">
+      <p>先用 <code>isDefEq</code> 检查，再赋值，所以不会造出错误的证明。</p>
+      <p><code>decl.toExpr</code>：局部声明对应的 <span class="fv">fvar</span>。</p>
+      <p><code>isDefEq</code> 比 <code>==</code> 强：会展开定义。但它不懂对称性：<code>a = b</code> 与 <code>b = a</code> 并非按定义相等，因此<code>h : a = b</code> 不能解决 <code>b = a</code>。</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>split_and</h2>
+  <pre class="lean tight">elab "split_and" : tactic => do
+  let goal ← getMainGoal
+  goal.withContext do
+    let target ← goal.getType'
+    let some (p, q) := target.and?
+      | throwError "split_and: 目标不是合取: {target}"
+    let gp ← mkFreshExprSyntheticOpaqueMVar p `left     -- ?left  : p
+    let gq ← mkFreshExprSyntheticOpaqueMVar q `right    -- ?right : q
+    goal.assign (mkApp4 (mkConst ``And.intro) p q gp gq)
+    replaceMainGoal [gp.mvarId!, gq.mvarId!]
+
+example (p q : Prop) (hp : p) (hq : q) : p ∧ q := by
+  split_and
+  · my_assumption
+  · my_assumption</pre>
+  <p class="small"><span class="hole">?g</span> := And.intro <span class="hole">?left</span> <span class="hole">?right</span>。新 mvar 在 <code>withContext</code> 内创建，继承原目标的假设。</p>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>my_intro：使用现有 API</h2>
+  <div class="cols wide-left">
+    <pre class="lean">elab "my_intro " x:ident : tactic => do
+  let goal ← getMainGoal
+  let (_, newGoal) ← goal.intro x.getId
+  replaceMainGoal [newGoal]
+
+example (p q : Prop) : p → q → p := by
+  my_intro hp
+  my_intro hq
+  exact hp</pre>
+    <div class="small">
+      <p><code>MVarId.intro</code> 内部：加一个 fvar <code>x : α</code>，造新目标 <span class="hole">?g'</span> <code>: β x</code>，令 <span class="hole">?g</span> := <code>fun x => ?g'</code>。</p>
+      <p><code>MVarId</code> 上现成的：<code>intro</code>、<code>apply</code>、<code>assumption</code>、<code>cases</code>、<code>induction</code>、<code>rewrite</code>、<code>exfalso</code>、<code>clear</code>……</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>evalTactic：组合已有 tactic</h2>
+  <pre class="lean">elab "auto_and" : tactic => do
+  evalTactic (← `(tactic| repeat' split_and))
+  evalTactic (← `(tactic| all_goals first | my_assumption | rfl | omega))
+
+example (p q : Prop) (hp : p) (hq : q) (n : Nat) (h : n > 3) :
+    (p ∧ 1 + 1 = 2) ∧ (q ∧ n ≥ 2) := by
+  auto_and</pre>
+  <p class="small">构造 tactic 语法，再运行它。<code>repeat'</code> 对所有子目标反复应用，<code>all_goals</code> 对每个剩余目标运行。</p>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>smart：看了目标再决定</h2>
+  <div class="cols wide-left">
+    <pre class="lean tight">syntax "smart" : tactic
+
+elab_rules : tactic | `(tactic| smart) => do
+  let goal ← getMainGoal
+  let target ← goal.withContext goal.getType'
+  if target.isAppOf ``And then
+    evalTactic (← `(tactic| split_and &lt;;&gt; smart))
+  else if target.isAppOf ``Eq then
+    evalTactic (← `(tactic| first | rfl | omega | simp))
+  else
+    evalTactic (← `(tactic| my_assumption))
+
+example (p : Prop) (hp : p) (n : Nat) :
+    p ∧ (n + 0 = n ∧ 2 * 3 = 6) := by
+  smart</pre>
+    <div class="small">
+      <p>要在实现里引用 <code>smart</code> 自己，得先用 <code>syntax</code> 声明语法，再用 <code>elab_rules</code> 写实现，和第 7 节的 <code>macro_rules</code> 同理。直接写 <code>elab "smart"</code> 时，函数体里的 <code>smart</code> 还没注册，解析失败。</p>
+      <div class="note"><p>宏做不到这件事，因为宏看不见目标。这就是从 <code>macro</code> 走到 <code>elab</code> 换来的能力。</p></div>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-sec="8 动手写 tactic">
+  <h2>常见错误</h2>
+  <table>
+    <tr><th>症状</th><th>原因</th><th>修法</th></tr>
+    <tr><td><code>unknown free variable</code></td><td>没进目标的上下文</td><td><code>goal.withContext do …</code></td></tr>
+    <tr><td><code>and?</code> / <code>isAppOf</code> 意外失败</td><td>未规范化：有 mvar 或可展开的定义</td><td><code>getType'</code>、<code>instantiateMVars</code>、<code>whnfR</code></td></tr>
+    <tr><td>最后才报类型不匹配</td><td><code>assign</code> 不检查类型</td><td>先 <code>isDefEq</code>，或用 <code>checkedAssign</code></td></tr>
+    <tr><td>目标没消失 / 新目标不见了</td><td>没更新目标列表</td><td><code>replaceMainGoal</code></td></tr>
+  </table>
+</section>
+
+<section class="slide section" data-sec="9 收尾">
+  <div class="idx">9</div><h2>收尾与延伸</h2>
+  <div class="route" data-on="9"></div>
+</section>
+
+<section class="slide" data-sec="9 收尾">
+  <h2>今天走过的路</h2>
+  <div class="pipe">
+    <div class="stage"><b>Syntax / Expr</b><span>代码和证明<br>都是数据</span></div>
+    <div class="arrow"></div>
+    <div class="stage"><b>?g</b><span>目标是洞<br>tactic 填洞</span></div>
+    <div class="arrow"></div>
+    <div class="stage"><b>MetaM</b><span>读、造 Expr<br>unify、赋值</span></div>
+    <div class="arrow"></div>
+    <div class="stage"><b>`(…) $x</b><span>构造 Syntax</span></div>
+    <div class="arrow"></div>
+    <div class="stage hl"><b>自己的 tactic</b><span>检查 → 造项<br>→ 赋值 → 更新目标</span></div>
+  </div>
+</section>
+
+<section class="slide" data-sec="9 收尾">
+  <h2>接下来读什么、写什么</h2>
+  <div class="cols">
+    <div class="small">
+      <h3>读</h3>
+      <p><a href="https://lean-lang.org/functional_programming_in_lean/">Functional Programming in Lean</a>, 如何用 Lean 写程序</p>
+      <p><a href="https://leanprover-community.github.io/lean4-metaprogramming-book/">Metaprogramming in Lean 4</a></p>
+      <p><a href="https://github.com/tonyxty">我的 GitHub</a></p>
+      <p>Mathlib <code>Mathlib/Tactic/</code>，从短的开始：<code>Use.lean</code>、<code>Contrapose.lean</code></p>
+      <p>Lean 核心 <code>Lean/Elab/Tactic/</code>、<code>Lean/Meta/Tactic/</code></p>
+      <p>command 也可以自己定义</p>
+    </div>
+    <div class="small">
+      <h3>写</h3>
+      <p><code>find_contra</code>：找 <code>h₁ : p</code> 和 <code>h₂ : ¬p</code>
+      <p>改进 <code>my_assumption</code>：找不到就逐个尝试 <code>goal.apply</code></p>
+      <p>Domain-specific 算法：差分约束系统，单纯形，Gronber basis, 命题逻辑的 SAT</p>
+      <p>与其他程序交互</p>
+    </div>
+  </div>
+</section>
+</div>
+<div id="bar"></div>
+<div id="help">← → 翻页 · F 全屏</div>
+<script>
+(() => {
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const stage = document.getElementById('stage');
+  const bar = document.getElementById('bar');
+  const SECTIONS = ['动机', 'Lean 编程', 'Syntax', 'Expr', '元变量', 'MetaM', '引用与宏', '写 tactic', '收尾'];
+
+  // 章节页上的路线条
+  document.querySelectorAll('.route').forEach(r => {
+    const on = Number(r.dataset.on);
+    r.innerHTML = SECTIONS.map((s, i) =>
+      `<span class="${i + 1 === on ? 'on' : ''}">${i + 1} ${s}</span>`).join('');
+  });
+
+  // 页眉（所属章节）与页码
+  slides.forEach((s, i) => {
+    if (s.dataset.sec && !s.classList.contains('section')) {
+      const c = document.createElement('div'); c.className = 'crumb'; c.textContent = s.dataset.sec; s.appendChild(c);
+    }
+    if (i > 0) {
+      const n = document.createElement('div'); n.className = 'num'; n.textContent = `${i + 1} / ${slides.length}`; s.appendChild(n);
+    }
+  });
+
+  // Lean 语法高亮
+  const KW = new Set(('def theorem example structure where deriving fun let mut for in do if then else match with ' +
+    'return macro macro_rules syntax elab open import by show from continue set_option try catch').split(' '));
+  const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const span = (cls, s) => `<span class="${cls}">${esc(s)}</span>`;
+  function highlight(src) {
+    let out = '', i = 0;
+    const idRe = /[A-Za-z_À-ɏͰ-Ͽ₀-₉⁰-₟][A-Za-z0-9_'.!?À-ɏͰ-Ͽ₀-₉⁰-₟]*/y;
+    while (i < src.length) {
+      const rest = src.slice(i);
+      let m;
+      if (rest.startsWith('--')) { const e = src.indexOf('\n', i); const end = e < 0 ? src.length : e; out += span('t-cmt', src.slice(i, end)); i = end; continue; }
+      if ((m = /^[sm]?!?"(?:[^"\\]|\\.)*"/.exec(rest)) && (rest[0] === '"' || /^[sm]!"/.test(rest))) { out += span('t-str', m[0]); i += m[0].length; continue; }
+      if ((m = /^`\([a-z]+\|/.exec(rest))) { out += span('t-quote', m[0]); i += m[0].length; continue; }
+      if ((m = /^``?[A-Za-z_][A-Za-z0-9_.']*/.exec(rest))) { out += span('t-const', m[0]); i += m[0].length; continue; }
+      if ((m = /^\$[A-Za-z_][A-Za-z0-9_]*/.exec(rest))) { out += span('t-anti', m[0]); i += m[0].length; continue; }
+      if ((m = /^\?[A-Za-z_][A-Za-z0-9_'₀-₉]*/.exec(rest))) { out += span('t-hole', m[0]); i += m[0].length; continue; }
+      if ((m = /^#[a-z_]+/.exec(rest))) { out += span('t-kw', m[0]); i += m[0].length; continue; }
+      if ((m = /^\d+/.exec(rest)) && !/[A-Za-z0-9_]/.test(src[i - 1] || '')) { out += span('t-num', m[0]); i += m[0].length; continue; }
+      idRe.lastIndex = i;
+      if ((m = idRe.exec(src))) {
+        const w = m[0];
+        out += KW.has(w) ? span('t-kw', w) : esc(w);
+        i += w.length; continue;
+      }
+      out += esc(src[i]); i++;
+    }
+    return out;
+  }
+  document.querySelectorAll('pre.lean').forEach(p => { p.innerHTML = highlight(p.textContent); });
+
+  // 缩放到窗口
+  function fit() {
+    const k = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+    stage.style.transform = `translate(-50%, -50%) scale(${k})`;
+  }
+  window.addEventListener('resize', fit); fit();
+
+  // 翻页
+  let cur = Math.max(0, Math.min(slides.length - 1, (parseInt(location.hash.slice(1), 10) || 1) - 1));
+  function show(i) {
+    cur = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, j) => s.classList.toggle('active', j === cur));
+    bar.style.width = `${(cur + 1) / slides.length * 100}%`;
+    history.replaceState(null, '', `#${cur + 1}`);
+  }
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(cur + 1); }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(cur - 1); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'f' || e.key === 'F') {
+      document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen?.();
+    }
+  });
+  show(cur);
+})();
+</script>
+</body>
+</html>
